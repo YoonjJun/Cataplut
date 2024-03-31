@@ -1,6 +1,7 @@
 from transformers import BertTokenizer, BertModel
 import torch
 from g4f.client import Client
+from sklearn.metrics.pairwise import cosine_similarity
 
 client = Client()
 

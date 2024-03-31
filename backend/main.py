@@ -33,21 +33,15 @@ def read_root(request: Request):
 
 @app.get("/test")
 async def test(request: Request):
-    # put_sample_data()
+    put_sample_data()
     return {}
 
 @app.post("/company", response_class=HTMLResponse)
 async def create_company(company_name: str = Form(...), problem: str = Form(...), solution: str = Form(...)):
     print("received")
     insert_company(company_name, problem, solution)
-    print(get_matched_companies(get_company_id(company_name)))
-    return templates.TemplateResponse("result.html", {"request":{}, "data": get_matched_companies(get_company_id(company_name))})
-
-@app.get("/company/result")
-async def get_matched(company_name: str):
-    company_id = get_company_id(company_name)
-    matched_companies = get_matched_companies(company_id)
-    return {"matched_list": [{"company_name": company_name}]}
+    matched = get_matched_companies(get_company_id(company_name))
+    return templates.TemplateResponse("result.html", {"request":{}, "data": matched})
 
 load_dotenv()
 
@@ -64,7 +58,7 @@ mydb = mysql.connector.connect(
 )
 
 tensor_shape = (1, 768)
-threshold = 0.8
+threshold = 0.85
 
 def test_db():
     mycursor = mydb.cursor()
@@ -85,7 +79,7 @@ def insert_company(name, prob_text, sol_text):
     mycursor.execute("SELECT LAST_INSERT_ID()")
     company_id = mycursor.fetchone()[0]
 
-    print("company_id: ", company_id)
+    # print("company_id: ", company_id)
 
     prob_emb = get_embedding(prob_text, 0)
     sol_emb = get_embedding(sol_text, 1)
@@ -109,7 +103,7 @@ def insert_problem(company_id, prob_text, prob_emb):
     mycursor.execute("SELECT LAST_INSERT_ID()")
     prob_id = mycursor.fetchone()[0]
 
-    print("problem_id: ", prob_id)
+    # print("problem_id: ", prob_id)
 
     return prob_id
 
@@ -143,6 +137,7 @@ def calc_similarity_with_problems(sol_id, sol_emb):
         prob_emb = torch.tensor(prob_emb, dtype=torch.float32)
         
         score = get_similarity(sol_emb, prob_emb)[0][0].item()
+        # print("calc_score: ", score)
         if score > threshold:
             insert_score(prob_id, sol_id, score)
 
@@ -159,6 +154,7 @@ def calc_similarity_with_solutions(prob_id, prob_emb):
         if prob_id == sol_id:
             continue
         score = get_similarity(prob_emb, sol_emb)[0][0].item()
+        # print("calc_score: ", score)
         if score > threshold:
             insert_score(prob_id, sol_id, score)
 
@@ -211,10 +207,12 @@ def get_company_id_of_prob(prob_id):
 
 def get_matched_companies(company_id):
     prob_ids = get_problem_ids(company_id)
+    # print("prob_id: ", prob_ids[0])
     sols_ids = get_solution_ids(company_id)
+    # print("sol_id: ", sols_ids[0])
     mycursor = mydb.cursor()
-    sql = "SELECT solId FROM Score WHERE probId = %s"
-    val = (prob_ids[0],)
+    sql = "SELECT solId FROM Score WHERE probId = %s AND simScore > %s"
+    val = (prob_ids[0], threshold)
     row_count = mycursor.execute(sql, val)
     if row_count == 0:
         return []
@@ -226,7 +224,9 @@ def get_matched_companies(company_id):
         sol_company_id = get_company_id_of_sol(sol_id)
         prob_id_of_sol_company = get_problem_ids(sol_company_id)[0]
         score = get_score(prob_id_of_sol_company, sols_ids[0])
+        # print("score: ", score)
         if score > threshold:
+            print("matched")
             matched_companies.append({"company_name": get_company_name(sol_company_id)})
     
     if len(matched_companies) > 3:
@@ -267,6 +267,8 @@ def get_score(prob_id, sol_id):
     if row_count == 0:
         return 0.0
     myresult = mycursor.fetchall()
+    if len(myresult) == 0:
+        return 0.0
 
     return myresult[0][0]
 
@@ -306,7 +308,7 @@ prompts = ["""
             ]
 
 def get_embedding(raw_text, is_sol):
-    return encode_text_to_vector(raw_text)
+    # return encode_text_to_vector(raw_text)
     response = client.chat.completions.create(
                 model="gpt-4",
                 messages=[{"role": "user",
@@ -323,7 +325,7 @@ def put_sample_data():
         next(reader)  # Skip header row
         i = 0
         for row in reader:
-            if i < 1100:
+            if i < 1200:
                 i += 1
                 continue
             print(i)

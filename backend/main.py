@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 
 import mysql.connector
 from dotenv import load_dotenv
@@ -12,24 +13,27 @@ from g4f.client import Client
 from sklearn.metrics.pairwise import cosine_similarity
 
 app = FastAPI()
+app.mount("/static", StaticFiles(directory="../static"), name="static")
 
 templates = Jinja2Templates(directory="../templates")
 
 @app.get("/")
 def read_root():
-    # db.test_db()
     return {"Hello": "World"}
 
 @app.get("/test")
 async def test(request: Request):
-    return templates.TemplateResponse("home.html", {"request":request})
+    test_db()
+    return templates.TemplateResponse("index.html", {"request":request})
 
 @app.post("/company")
 async def create_company(name: str, prob: str, sol: str):
-    db.insert_company(name)
-    db.insert_problem(name, prob)
-    db.insert_solution(name, sol)
+    insert_company(name, prob, sol)
     return {}
+
+@app.get("/matched/{company_name}")
+async def get_matched(company_name: str):
+    return {"matched_list": [{"company_name": company_name}]}
 
 load_dotenv()
 
@@ -47,7 +51,7 @@ mydb = mysql.connector.connect(
 
 def test_db():
     mycursor = mydb.cursor()
-    mycursor.execute("SELECT * FROM test")
+    mycursor.execute("SELECT * FROM Company")
     myresult = mycursor.fetchall()
     for x in myresult:
         print(x)

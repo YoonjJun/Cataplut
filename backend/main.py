@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
-#템플릿 엔진 삽입
 from fastapi.templating import Jinja2Templates
+import db
 
 app = FastAPI()
 
@@ -9,6 +9,7 @@ templates = Jinja2Templates(directory="../templates")
 
 @app.get("/")
 def read_root():
+    # db.test_db()
     return {"Hello": "World"}
 
 @app.get("/test")

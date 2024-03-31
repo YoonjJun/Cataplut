@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Form
+from pydantic import BaseModel
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -11,11 +12,19 @@ from transformers import BertTokenizer, BertModel
 import torch
 from g4f.client import Client
 from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
+import nest_asyncio
+nest_asyncio.apply()
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="../static"), name="static")
 
 templates = Jinja2Templates(directory="../templates")
+
+class CompanyInfoRequest(BaseModel):
+    company_name: str
+    problem: str
+    solution: str
 
 @app.get("/")
 def read_root():
@@ -27,13 +36,16 @@ async def test(request: Request):
     return templates.TemplateResponse("index.html", {"request":request})
 
 @app.post("/company")
-async def create_company(name: str, prob: str, sol: str):
-    insert_company(name, prob, sol)
+async def create_company(company_name: str = Form(...), problem: str = Form(...), solution: str = Form(...)):
+    print("received")
+    insert_company(company_name, problem, solution)
     return {}
 
-@app.get("/matched/{company_name}")
-async def get_matched(company_name: str):
-    return {"matched_list": [{"company_name": company_name}]}
+# @app.get("/matched/{company_name}")
+# async def get_matched(company_name: str):
+#     company_id = get_company_id(company_name)
+#     # get matched company list
+#     return {"matched_list": [{"company_name": company_name}]}
 
 load_dotenv()
 
@@ -49,6 +61,8 @@ mydb = mysql.connector.connect(
   database=MYSQL_DB
 )
 
+tensor_shape = (1, 768)
+
 def test_db():
     mycursor = mydb.cursor()
     mycursor.execute("SELECT * FROM Company")
@@ -58,33 +72,61 @@ def test_db():
 
 def insert_company(name, prob_text, sol_text):
     mycursor = mydb.cursor()
-    sql = "INSERT INTO Company (name) VALUES (%s)"
-    val = (name)
+    sql = "INSERT INTO Company (companyName) VALUES (%s)"
+    val = (name,)
     mycursor.execute(sql, val)
     mydb.commit()
 
-    company_id = get_company_id(name)
-    prob_emb = ai.get_embedding(prob_text)
-    sol_emb = ai.get_embedding(sol_text)
+    print("company inserted")
 
-    calc_similarity(company_id, prob_emb, is_sol = 0)
-    calc_similarity(company_id, sol_emb, is_sol = 1)
-    insert_problem(company_id, prob_text, prob_emb)
-    insert_solution(company_id, sol_text, sol_emb)
+    mycursor.execute("SELECT LAST_INSERT_ID()")
+    company_id = mycursor.fetchone()[0]
+
+    print("company_id: ", company_id)
+
+    prob_emb = get_embedding(prob_text, 0)
+    sol_emb = get_embedding(sol_text, 1)
+
+    prob_id = insert_problem(company_id, prob_text, prob_emb)
+    sol_id = insert_solution(company_id, sol_text, sol_emb)
+    calc_similarity_with_solutions(prob_id, prob_emb)
+    calc_similarity_with_problems(sol_id, sol_emb)
+    
 
 def insert_problem(company_id, prob_text, prob_emb):
+    emb_bytes = prob_emb.numpy().tobytes()
     mycursor = mydb.cursor()
     sql = "INSERT INTO Problem (companyId, probText, probEmb) VALUES (%s, %s, %s)"
-    val = (company_id, prob_text, prob_emb)
+    val = (company_id, prob_text, emb_bytes)
     mycursor.execute(sql, val)
     mydb.commit()
 
+    print("problem inserted")
+
+    mycursor.execute("SELECT LAST_INSERT_ID()")
+    prob_id = mycursor.fetchone()[0]
+
+    print("problem_id: ", prob_id)
+
+    return prob_id
+
+
 def insert_solution(company_id, sol_text, sol_emb):
+    emb_bytes = sol_emb.numpy().tobytes()
     mycursor = mydb.cursor()
     sql = "INSERT INTO Solution (companyId, solText, solEmb) VALUES (%s, %s, %s)"
-    val = (company_id, sol)
+    val = (company_id, sol_text, emb_bytes)
     mycursor.execute(sql, val)
     mydb.commit()
+
+    print("solution inserted")
+
+    mycursor.execute("SELECT LAST_INSERT_ID()")
+    sol_id = mycursor.fetchone()[0]
+
+    print("sol_id: ", sol_id)
+
+    return sol_id
 
 def calc_similarity_with_problems(sol_id, sol_emb):
     mycursor = mydb.cursor()
@@ -94,9 +136,11 @@ def calc_similarity_with_problems(sol_id, sol_emb):
 
     for row in rows:
         prob_id = row[0]
-        prob_emb = row[1]
-        score = ai.get_similarity(emb, prob_emb)
-        insert_score(prob_id, sol_id, score)
+        prob_emb = np.frombuffer(row[1], dtype=np.float32).reshape(tensor_shape)
+        prob_emb = torch.tensor(prob_emb, dtype=torch.float32)
+        
+        score = get_similarity(sol_emb, prob_emb)
+        insert_score(prob_id, sol_id, score[0][0].item())
 
 def calc_similarity_with_solutions(prob_id, prob_emb):
     mycursor = mydb.cursor()
@@ -106,16 +150,26 @@ def calc_similarity_with_solutions(prob_id, prob_emb):
 
     for row in rows:
         sol_id = row[0]
-        sol_emb = row[1]
-        score = ai.get_similarity(emb, sol_emb)
-        insert_score(prob_id, sol_id, score)
+        sol_emb = np.frombuffer(row[1], dtype=np.float32).reshape(tensor_shape)
+        sol_emb = torch.tensor(sol_emb, dtype=torch.float32)
+        score = get_similarity(prob_emb, sol_emb)
+        insert_score(prob_id, sol_id, score[0][0].item())
 
 def insert_score(prob_id, sol_id, score):
     mycursor = mydb.cursor()
-    sql = "INSERT INTO Score (probId, solId, score) VALUES (%s, %s, %s)"
+    sql = "INSERT INTO Score (probId, solId, simScore) VALUES (%s, %s, %s)"
     val = (prob_id, sol_id, score)
     mycursor.execute(sql, val)
     mydb.commit()
+
+def get_company_id(name):
+    mycursor = mydb.cursor()
+    sql = "SELECT companyId FROM Company WHERE companyName = %s"
+    val = (name,)
+    mycursor.execute(sql, val)
+    myresult = mycursor.fetchall()
+
+    return myresult[0][0]
 
 
 
@@ -160,3 +214,6 @@ def get_embedding(raw_text, is_sol):
                            "content": prompts[is_sol] + f"{raw_text} Summarize the problems in no more than 150 words."}]
             )
     return encode_text_to_vector(response.choices[0].message.content)
+
+def get_similarity(emb1, emb2):
+    return cosine_similarity(emb1, emb2)

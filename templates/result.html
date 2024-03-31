@@ -38,6 +38,12 @@
 
   <div class="hero_area">
 
+    <div class="hero_bg_box">
+      <div class="bg_img_box">
+        <img src="static/images/hero-bg.png" alt="">
+      </div>
+    </div>
+
     <!-- header section strats -->
     <header class="header_section">
       <div class="container-fluid">
@@ -94,31 +100,24 @@
                 <div class="col-md-6 ">
                   <div class="detail-box">
                     <h1>
-                      DESCRIPTION
+                      Matching Result
                     </h1>
-                    <p>
-                      Please fill out following forms below.
-                    </p>
-                    <form id= "submit_form" class="transfot" action="/company" method="post">
-                      <div class="col-md-12">
-                         <h3 style="color:white;">Your Company information</h3>
-                      </div>
-                      <div class="col-md-12">
-                         <input placeholder="Company Name" type="text" size="40" maxlength="40" name="company_name", id="company_name" required>
-                      </div>
-                    </br>
-                      <div class="col-md-12">
-                        <textarea rows="5" cols="60" placeholder="Problem" type="text"  name="problem", id="problem" required></textarea>
-                      </div>
-                      <div class="col-md-12">
-                        <textarea rows="5" cols="60" placeholder="Solution" type="text"  name="solution", id="solution" required></textarea>
-                      </div>
-                    </br>
-                      <div class="col-md-12">
-                         <button id= "submit_btn", class="get_now">Submit</button>
-                      </div>
-                  
-                   </form>
+                    {% if data %}
+                      <table border="2" style="border: 1px solid #bcbcbc;">
+                        <th style="color:white;">Company Name</th>
+                        <!-- <th style="color:white;">Match Percentage</th> -->
+                        {% for item in data %}
+                          <tr style="color:white;">
+                            <td style="color:white;">첫번째 칸</td>
+                            <!-- <td style="color:white;">두번째 칸</td> -->
+                          </tr>
+                        {% endfor %}
+                      </table>
+                    {% else %}
+                      <table border="2" style="border: 1px solid #bcbcbc;">
+                        <th style="color:white;">No result</th>
+                      </table>
+                    {% endif %}
                     <!-- <div class="btn-box">
                       <a href="" class="btn1">
                         Read More

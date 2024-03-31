@@ -1,3 +1,4 @@
+import csv
 from fastapi import FastAPI, Request, Form
 from pydantic import BaseModel
 from fastapi.responses import HTMLResponse
@@ -27,25 +28,26 @@ class CompanyInfoRequest(BaseModel):
     solution: str
 
 @app.get("/")
-def read_root():
-    return {"Hello": "World"}
+def read_root(request: Request):
+    return templates.TemplateResponse("index.html", {"request":request})
 
 @app.get("/test")
 async def test(request: Request):
-    test_db()
-    return templates.TemplateResponse("index.html", {"request":request})
+    # put_sample_data()
+    return {}
 
-@app.post("/company")
+@app.post("/company", response_class=HTMLResponse)
 async def create_company(company_name: str = Form(...), problem: str = Form(...), solution: str = Form(...)):
     print("received")
     insert_company(company_name, problem, solution)
-    return {}
+    print(get_matched_companies(get_company_id(company_name)))
+    return templates.TemplateResponse("result.html", {"request":{}, "data": get_matched_companies(get_company_id(company_name))})
 
-# @app.get("/matched/{company_name}")
-# async def get_matched(company_name: str):
-#     company_id = get_company_id(company_name)
-#     # get matched company list
-#     return {"matched_list": [{"company_name": company_name}]}
+@app.get("/company/result")
+async def get_matched(company_name: str):
+    company_id = get_company_id(company_name)
+    matched_companies = get_matched_companies(company_id)
+    return {"matched_list": [{"company_name": company_name}]}
 
 load_dotenv()
 
@@ -62,6 +64,7 @@ mydb = mysql.connector.connect(
 )
 
 tensor_shape = (1, 768)
+threshold = 0.8
 
 def test_db():
     mycursor = mydb.cursor()
@@ -139,8 +142,9 @@ def calc_similarity_with_problems(sol_id, sol_emb):
         prob_emb = np.frombuffer(row[1], dtype=np.float32).reshape(tensor_shape)
         prob_emb = torch.tensor(prob_emb, dtype=torch.float32)
         
-        score = get_similarity(sol_emb, prob_emb)
-        insert_score(prob_id, sol_id, score[0][0].item())
+        score = get_similarity(sol_emb, prob_emb)[0][0].item()
+        if score > threshold:
+            insert_score(prob_id, sol_id, score)
 
 def calc_similarity_with_solutions(prob_id, prob_emb):
     mycursor = mydb.cursor()
@@ -152,8 +156,11 @@ def calc_similarity_with_solutions(prob_id, prob_emb):
         sol_id = row[0]
         sol_emb = np.frombuffer(row[1], dtype=np.float32).reshape(tensor_shape)
         sol_emb = torch.tensor(sol_emb, dtype=torch.float32)
-        score = get_similarity(prob_emb, sol_emb)
-        insert_score(prob_id, sol_id, score[0][0].item())
+        if prob_id == sol_id:
+            continue
+        score = get_similarity(prob_emb, sol_emb)[0][0].item()
+        if score > threshold:
+            insert_score(prob_id, sol_id, score)
 
 def insert_score(prob_id, sol_id, score):
     mycursor = mydb.cursor()
@@ -161,6 +168,19 @@ def insert_score(prob_id, sol_id, score):
     val = (prob_id, sol_id, score)
     mycursor.execute(sql, val)
     mydb.commit()
+
+    print("score inserted")
+
+def get_company_name(company_id):
+    mycursor = mydb.cursor()
+    sql = "SELECT companyName FROM Company WHERE companyId = %s"
+    val = (company_id,)
+    row_count = mycursor.execute(sql, val)
+    if row_count == 0:
+        return None
+    myresult = mycursor.fetchall()
+
+    return myresult[0][0]
 
 def get_company_id(name):
     mycursor = mydb.cursor()
@@ -171,6 +191,84 @@ def get_company_id(name):
 
     return myresult[0][0]
 
+def get_company_id_of_sol(sol_id):
+    mycursor = mydb.cursor()
+    sql = "SELECT companyId FROM Solution WHERE solId = %s"
+    val = (sol_id,)
+    mycursor.execute(sql, val)
+    myresult = mycursor.fetchall()
+
+    return myresult[0][0]
+
+def get_company_id_of_prob(prob_id):
+    mycursor = mydb.cursor()
+    sql = "SELECT companyId FROM Problem WHERE probId = %s"
+    val = (prob_id,)
+    mycursor.execute(sql, val)
+    myresult = mycursor.fetchall()
+
+    return myresult[0][0]
+
+def get_matched_companies(company_id):
+    prob_ids = get_problem_ids(company_id)
+    sols_ids = get_solution_ids(company_id)
+    mycursor = mydb.cursor()
+    sql = "SELECT solId FROM Score WHERE probId = %s"
+    val = (prob_ids[0],)
+    row_count = mycursor.execute(sql, val)
+    if row_count == 0:
+        return []
+    myresult = mycursor.fetchall()
+    matched_sols = [row[0] for row in myresult]
+
+    matched_companies = []
+    for sol_id in matched_sols:
+        sol_company_id = get_company_id_of_sol(sol_id)
+        prob_id_of_sol_company = get_problem_ids(sol_company_id)[0]
+        score = get_score(prob_id_of_sol_company, sols_ids[0])
+        if score > threshold:
+            matched_companies.append({"company_name": get_company_name(sol_company_id)})
+    
+    if len(matched_companies) > 3:
+        return matched_companies[:3]
+
+    return matched_companies
+
+
+def get_problem_ids(company_id):
+    mycursor = mydb.cursor()
+    sql = "SELECT probId FROM Problem WHERE companyId = %s"
+    val = (company_id,)
+    row_count = mycursor.execute(sql, val)
+    if row_count == 0:
+        return []
+    myresult = mycursor.fetchall()
+    prob_ids = [row[0] for row in myresult]
+
+    return prob_ids
+
+def get_solution_ids(company_id):
+    mycursor = mydb.cursor()
+    sql = "SELECT solId FROM Solution WHERE companyId = %s"
+    val = (company_id,)
+    row_count = mycursor.execute(sql, val)
+    if row_count == 0:
+        return []
+    myresult = mycursor.fetchall()
+    sol_ids = [row[0] for row in myresult]
+
+    return sol_ids
+
+def get_score(prob_id, sol_id):
+    mycursor = mydb.cursor()
+    sql = "SELECT simScore FROM Score WHERE probId = %s AND solId = %s"
+    val = (prob_id, sol_id)
+    row_count = mycursor.execute(sql, val)
+    if row_count == 0:
+        return 0.0
+    myresult = mycursor.fetchall()
+
+    return myresult[0][0]
 
 
 client = Client()
@@ -208,6 +306,7 @@ prompts = ["""
             ]
 
 def get_embedding(raw_text, is_sol):
+    return encode_text_to_vector(raw_text)
     response = client.chat.completions.create(
                 model="gpt-4",
                 messages=[{"role": "user",
@@ -217,3 +316,19 @@ def get_embedding(raw_text, is_sol):
 
 def get_similarity(emb1, emb2):
     return cosine_similarity(emb1, emb2)
+
+def put_sample_data():
+    with open('fake_company_data.csv', 'r') as file:
+        reader = csv.reader(file)
+        next(reader)  # Skip header row
+        i = 0
+        for row in reader:
+            if i < 1100:
+                i += 1
+                continue
+            print(i)
+            name = row[0]
+            prob_text = row[1]
+            sol_text = row[2]
+            insert_company(name, prob_text, sol_text)
+            i += 1
